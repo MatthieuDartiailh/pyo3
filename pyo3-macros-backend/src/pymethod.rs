@@ -4,7 +4,7 @@ use std::ffi::CString;
 use crate::attributes::{FromPyWithAttribute, NameAttribute, RenamingRule};
 #[cfg(feature = "experimental-inspect")]
 use crate::introspection::unique_element_id;
-use crate::method::{CallingConvention, ExtractErrorMode, PyArg};
+use crate::method::{CallingConvention, ExtractErrorMode, PyArg, SelfConversionPolicy};
 use crate::params::{impl_arg_params, impl_regular_arg_param, Holders};
 use crate::pyfunction::WarningFactory;
 use crate::utils::PythonDoc;
@@ -374,8 +374,16 @@ pub fn impl_py_method_def(
     let Ctx { pyo3_path, .. } = ctx;
     let wrapper_ident = format_ident!("__pymethod_{}__", spec.python_name);
     let calling_convention = CallingConvention::from_signature(&spec.signature);
-    let associated_method =
-        spec.get_wrapper_function(&wrapper_ident, Some(cls), calling_convention, ctx)?;
+    let associated_method = spec.get_wrapper_function(
+        &wrapper_ident,
+        Some(cls),
+        calling_convention,
+        // Regular `tp_methods` entries can be called from Python with an arbitrary
+        // receiver (e.g. `MyClass.method(wrong_type)`), so the receiver type must
+        // be checked at runtime.
+        SelfConversionPolicy::Checked,
+        ctx,
+    )?;
     let methoddef = spec.get_methoddef(
         quote! { #cls::#wrapper_ident },
         doc,
@@ -394,8 +402,15 @@ pub fn impl_py_method_def(
 fn impl_call_slot(cls: &syn::Type, spec: &FnSpec<'_>, ctx: &Ctx) -> Result<MethodAndSlotDef> {
     let Ctx { pyo3_path, .. } = ctx;
     let wrapper_ident = syn::Ident::new("__pymethod___call____", Span::call_site());
-    let associated_method =
-        spec.get_wrapper_function(&wrapper_ident, Some(cls), CallingConvention::Varargs, ctx)?;
+    let associated_method = spec.get_wrapper_function(
+        &wrapper_ident,
+        Some(cls),
+        CallingConvention::Varargs,
+        // The `tp_call` slot is dispatched by CPython, which guarantees the receiver
+        // is of the correct type.
+        SelfConversionPolicy::Trusted,
+        ctx,
+    )?;
     let slot_def = quote! {
         #pyo3_path::ffi::PyType_Slot {
             slot: #pyo3_path::ffi::Py_tp_call,
@@ -473,7 +488,7 @@ fn impl_clear_slot(cls: &syn::Type, spec: &FnSpec<'_>, ctx: &Ctx) -> syn::Result
         _ => bail_spanned!(spec.name.span() => "expected instance method for `__clear__` function"),
     };
     let mut holders = Holders::new();
-    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, false, &mut holders, ctx);
+    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, &mut holders, ctx);
 
     if let [arg, ..] = args {
         bail_spanned!(arg.ty().span() => "`__clear__` function expected to have no arguments");
@@ -571,7 +586,7 @@ fn impl_call_setter(
     ctx: &Ctx,
 ) -> syn::Result<TokenStream> {
     let (py_arg, args) = split_off_python_arg(&spec.signature.arguments);
-    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, false, holders, ctx);
+    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, holders, ctx);
 
     if args.is_empty() {
         bail_spanned!(spec.name.span() => "setter function expected to have one argument");
@@ -611,7 +626,7 @@ pub fn impl_py_setter_def(
                 span: Span::call_site(),
                 non_null: true,
             }
-            .receiver(cls, ExtractErrorMode::Raise, false, &mut holders, ctx);
+            .receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, &mut holders, ctx);
             if let Some(ident) = &field.ident {
                 // named struct field
                 quote!({ #slf.#ident = _val; })
@@ -757,7 +772,7 @@ fn impl_call_getter(
     ctx: &Ctx,
 ) -> syn::Result<TokenStream> {
     let (py_arg, args) = split_off_python_arg(&spec.signature.arguments);
-    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, false, holders, ctx);
+    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, holders, ctx);
     ensure_spanned!(
         args.is_empty(),
         args[0].ty().span() => "getter function can only have one argument (of type pyo3::Python)"
@@ -932,7 +947,7 @@ fn impl_call_deleter(
     ctx: &Ctx,
 ) -> Result<TokenStream> {
     let (py_arg, args) = split_off_python_arg(&spec.signature.arguments);
-    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, false, holders, ctx);
+    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, holders, ctx);
 
     if !args.is_empty() {
         bail_spanned!(spec.name.span() =>
@@ -1395,10 +1410,9 @@ impl SlotDef {
             spec,
             calling_convention,
             *extract_error_mode,
-            matches!(
-                calling_convention,
-                SlotCallingConvention::FixedArguments(&[Ty::MaybeNullObject, Ty::MaybeNullObject])
-            ),
+            // All extension-type slots use trusted self: CPython's slot dispatch
+            // contract guarantees the receiver is of the correct type.
+            SelfConversionPolicy::Trusted,
             &mut holders,
             return_mode.as_ref(),
             ctx,
@@ -1431,14 +1445,14 @@ impl SlotDef {
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "slot wrapper generation needs the descriptor fast-path flag"
+    reason = "slot wrapper generation needs the self-conversion policy flag"
 )]
 fn generate_method_body(
     cls: &syn::Type,
     spec: &FnSpec<'_>,
     calling_convention: &SlotCallingConvention,
     extract_error_mode: ExtractErrorMode,
-    descriptor_slot_receiver: bool,
+    self_conversion: SelfConversionPolicy,
     holders: &mut Holders,
     // NB ignored if calling_convention is SlotCallingConvention::TpNew, possibly should merge into that enum
     return_mode: Option<&ReturnMode>,
@@ -1451,7 +1465,7 @@ fn generate_method_body(
     let self_arg = spec.tp.self_arg(
         Some(cls),
         extract_error_mode,
-        descriptor_slot_receiver,
+        self_conversion,
         holders,
         ctx,
     );
@@ -1575,6 +1589,16 @@ struct SlotFragmentDef {
     arguments: &'static [Ty],
     extract_error_mode: ExtractErrorMode,
     ret_ty: Ty,
+    /// Self-conversion policy for this slot fragment.
+    ///
+    /// Most slot fragments are called by CPython with a receiver that is
+    /// guaranteed to be of the correct type (`Trusted`). However, binary
+    /// operator fragments are combined into a single slot (e.g. `nb_add`)
+    /// where the runtime helper may swap operands and call the reflected
+    /// fragment with a receiver of an unknown (potentially wrong) type.
+    /// Those fragments must use `Checked` so that a type mismatch returns
+    /// `NotImplemented` instead of causing undefined behaviour.
+    self_conversion: SelfConversionPolicy,
 }
 
 impl SlotFragmentDef {
@@ -1584,16 +1608,26 @@ impl SlotFragmentDef {
             arguments,
             extract_error_mode: ExtractErrorMode::Raise,
             ret_ty: Ty::Void,
+            self_conversion: SelfConversionPolicy::Trusted,
         }
     }
 
-    /// Specialized constructor for binary operators (which are a common pattern)
+    /// Specialized constructor for binary operators.
+    ///
+    /// Binary operator fragments (`__add__`, `__radd__`, etc.) are combined
+    /// into a shared slot (e.g. `nb_add`) that may call the forward fragment
+    /// with a non-class receiver (e.g. `1 + MyClass()` → `nb_add(1, c)`).
+    /// The runtime helper then tries the reflected fragment with the operands
+    /// swapped, which can also produce a non-class `_slf`.  Both cases require
+    /// a checked type conversion so that a mismatch gracefully returns
+    /// `NotImplemented` rather than causing undefined behaviour.
     const fn binary_operator(fragment: &'static str) -> Self {
         SlotFragmentDef {
             fragment,
             arguments: &[Ty::Object],
             extract_error_mode: ExtractErrorMode::NotImplemented,
             ret_ty: Ty::Object,
+            self_conversion: SelfConversionPolicy::Checked,
         }
     }
 
@@ -1604,6 +1638,11 @@ impl SlotFragmentDef {
 
     const fn ret_ty(mut self, ret_ty: Ty) -> Self {
         self.ret_ty = ret_ty;
+        self
+    }
+
+    const fn checked_self(mut self) -> Self {
+        self.self_conversion = SelfConversionPolicy::Checked;
         self
     }
 
@@ -1619,6 +1658,7 @@ impl SlotFragmentDef {
             arguments,
             extract_error_mode,
             ret_ty,
+            self_conversion,
         } = self;
         let fragment_trait = format_ident!("PyClass{}SlotFragment", fragment);
         let method = syn::Ident::new(fragment, Span::call_site());
@@ -1634,7 +1674,7 @@ impl SlotFragmentDef {
             spec,
             &SlotCallingConvention::FixedArguments(arguments),
             *extract_error_mode,
-            matches!(*fragment, "__set__" | "__delete__"),
+            *self_conversion,
             &mut holders,
             None,
             ctx,
@@ -1717,10 +1757,12 @@ const __ROR__: SlotFragmentDef = SlotFragmentDef::binary_operator("__ror__");
 
 const __POW__: SlotFragmentDef = SlotFragmentDef::new("__pow__", &[Ty::Object, Ty::Object])
     .extract_error_mode(ExtractErrorMode::NotImplemented)
-    .ret_ty(Ty::Object);
+    .ret_ty(Ty::Object)
+    .checked_self();
 const __RPOW__: SlotFragmentDef = SlotFragmentDef::new("__rpow__", &[Ty::Object, Ty::Object])
     .extract_error_mode(ExtractErrorMode::NotImplemented)
-    .ret_ty(Ty::Object);
+    .ret_ty(Ty::Object)
+    .checked_self();
 
 const __LT__: SlotFragmentDef = SlotFragmentDef::new("__lt__", &[Ty::Object])
     .extract_error_mode(ExtractErrorMode::NotImplemented)

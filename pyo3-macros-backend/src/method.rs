@@ -263,7 +263,7 @@ impl FnType {
         &self,
         cls: Option<&syn::Type>,
         error_mode: ExtractErrorMode,
-        descriptor_slot_receiver: bool,
+        self_conversion: SelfConversionPolicy,
         holders: &mut Holders,
         ctx: &Ctx,
     ) -> Option<TokenStream> {
@@ -273,7 +273,7 @@ impl FnType {
                 Some(st.receiver(
                     cls.expect("no class given for Fn with a \"self\" receiver"),
                     error_mode,
-                    descriptor_slot_receiver,
+                    self_conversion,
                     holders,
                     ctx,
                 ))
@@ -322,6 +322,33 @@ pub enum SelfType {
     },
 }
 
+/// Receiver conversion policy for extension-type method wrappers.
+///
+/// Controls whether the `self` receiver is validated with a runtime type check
+/// (`Checked`) or treated as trusted and cast directly without checking
+/// (`Trusted`).
+///
+/// # Invariant
+///
+/// The `Trusted` path is valid due to CPython's slot/method receiver contract:
+/// when CPython dispatches through a type slot installed on an extension type,
+/// the receiver is guaranteed to be an instance of that type (or a compatible
+/// subtype). Explicit Python calls to dunder methods go through CPython's slot
+/// wrapper, which performs type validation before reaching the generated wrapper.
+///
+/// `Checked` should be used for any context where that guarantee does not hold,
+/// e.g., regular `tp_methods` entries that can be called directly with an
+/// arbitrary receiver from Python.
+#[derive(Clone, Copy, Debug)]
+pub enum SelfConversionPolicy {
+    /// The receiver's type is guaranteed by CPython's slot dispatch contract.
+    /// Used for all extension-type slot entrypoints.
+    Trusted,
+    /// The receiver's type is verified at runtime. Used when the receiver cannot
+    /// be assumed to be of the correct type (e.g., regular Python-callable methods).
+    Checked,
+}
+
 #[derive(Clone, Copy)]
 pub enum ExtractErrorMode {
     NotImplemented,
@@ -348,7 +375,7 @@ impl SelfType {
         &self,
         cls: &syn::Type,
         error_mode: ExtractErrorMode,
-        descriptor_slot_receiver: bool,
+        self_conversion: SelfConversionPolicy,
         holders: &mut Holders,
         ctx: &Ctx,
     ) -> TokenStream {
@@ -370,22 +397,47 @@ impl SelfType {
                 };
                 let arg =
                     quote! { unsafe { #pyo3_path::impl_::extract_argument::#cast_fn(#py, #slf) } };
-                let method = if *mutable {
-                    syn::Ident::new("extract_pyclass_ref_mut", *span)
-                } else {
-                    syn::Ident::new("extract_pyclass_ref", *span)
-                };
                 let holder = holders.push_holder(*span);
                 let pyo3_path = pyo3_path.to_tokens_spanned(*span);
-                error_mode.handle_error(
-                    quote_spanned! { *span =>
-                        #pyo3_path::impl_::extract_argument::#method::<#cls>(
-                            #arg,
-                            &mut #holder,
+                match self_conversion {
+                    SelfConversionPolicy::Trusted => {
+                        let method = if *mutable {
+                            syn::Ident::new("extract_pyclass_ref_mut_trusted", *span)
+                        } else {
+                            syn::Ident::new("extract_pyclass_ref_trusted", *span)
+                        };
+                        // Use `quote!` (not `quote_spanned!`) for the `unsafe` block so that
+                        // the `unsafe` keyword has `Span::call_site()` and does not inherit the
+                        // user's code span.  This prevents triggering `#![forbid(unsafe_code)]`
+                        // in user crates (see the analogous comment in `impl_py_getter_def`).
+                        // Safety: slot wrappers are only installed on the extension type itself.
+                        // CPython's slot dispatch contract ensures the receiver is an instance
+                        // of the correct type before invoking the slot.
+                        let trusted_call = quote! {
+                            unsafe { #pyo3_path::impl_::extract_argument::#method::<#cls>(
+                                #arg,
+                                &mut #holder,
+                            ) }
+                        };
+                        error_mode.handle_error(trusted_call, ctx)
+                    }
+                    SelfConversionPolicy::Checked => {
+                        let method = if *mutable {
+                            syn::Ident::new("extract_pyclass_ref_mut", *span)
+                        } else {
+                            syn::Ident::new("extract_pyclass_ref", *span)
+                        };
+                        error_mode.handle_error(
+                            quote_spanned! { *span =>
+                                #pyo3_path::impl_::extract_argument::#method::<#cls>(
+                                    #arg,
+                                    &mut #holder,
+                                )
+                            },
+                            ctx,
                         )
-                    },
-                    ctx,
-                )
+                    }
+                }
             }
             SelfType::TryFromBoundRef { span, non_null } => {
                 let bound_ref = if *non_null {
@@ -394,22 +446,27 @@ impl SelfType {
                     quote! { unsafe { #pyo3_path::impl_::pymethods::BoundRef::ref_from_ptr(#py, &#slf) } }
                 };
                 let pyo3_path = pyo3_path.to_tokens_spanned(*span);
-                let receiver = if descriptor_slot_receiver {
-                    quote_spanned! { *span =>
-                        // Safety: descriptor slot wrappers are only installed on the descriptor
-                        // type itself. CPython calls those slots with `self` set to the
-                        // descriptor object found during lookup, and explicit Python calls to
-                        // `__get__`, `__set__`, and `__delete__` first pass through CPython's
-                        // slot wrapper, which rejects receivers of the wrong type before
-                        // reaching this generated wrapper.
-                        ::std::result::Result::<_, #pyo3_path::PyErr>::Ok(unsafe {
-                            #bound_ref.cast_unchecked::<#cls>()
-                        })
+                let receiver = match self_conversion {
+                    SelfConversionPolicy::Trusted => {
+                        // Use `quote!` (not `quote_spanned!`) for the inner `unsafe` block so
+                        // that it has `Span::call_site()` and does not trigger
+                        // `#![forbid(unsafe_code)]` in user crates.
+                        // Safety: slot wrappers are only installed on the extension type
+                        // itself. CPython's slot dispatch contract ensures the receiver is
+                        // an instance of the correct type (or a compatible subtype) before
+                        // invoking the slot.
+                        let cast = quote! {
+                            unsafe { #bound_ref.cast_unchecked::<#cls>() }
+                        };
+                        quote_spanned! { *span =>
+                            ::std::result::Result::<_, #pyo3_path::PyErr>::Ok(#cast)
+                        }
                     }
-                } else {
-                    quote_spanned! { *span =>
-                        #bound_ref.cast::<#cls>()
-                            .map_err(::std::convert::Into::<#pyo3_path::PyErr>::into)
+                    SelfConversionPolicy::Checked => {
+                        quote_spanned! { *span =>
+                            #bound_ref.cast::<#cls>()
+                                .map_err(::std::convert::Into::<#pyo3_path::PyErr>::into)
+                        }
                     }
                 };
                 error_mode.handle_error(
@@ -693,6 +750,7 @@ impl<'a> FnSpec<'a> {
         ident: &proc_macro2::Ident,
         cls: Option<&syn::Type>,
         convention: CallingConvention,
+        self_conversion: SelfConversionPolicy,
         ctx: &Ctx,
     ) -> Result<TokenStream> {
         let Ctx {
@@ -717,7 +775,7 @@ impl<'a> FnSpec<'a> {
         let rust_call = |args: Vec<TokenStream>, mut holders: Holders| {
             let self_arg = self
                 .tp
-                .self_arg(cls, ExtractErrorMode::Raise, false, &mut holders, ctx);
+                .self_arg(cls, ExtractErrorMode::Raise, self_conversion, &mut holders, ctx);
             let init_holders = holders.init_holders(ctx);
 
             // We must assign the output_span to the return value of the call,
