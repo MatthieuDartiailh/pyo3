@@ -2797,14 +2797,13 @@ impl<'a> PyClassImplsBuilder<'a> {
         let is_basetype = self.attr.options.subclass.is_some();
         let is_metaclass = self.attr.options.metaclass.is_some();
         let base = if is_metaclass {
-            // When `metaclass` is set, the base type is always `PyType` (Python's `type`).
-            if let Some(extends_attr) = &self.attr.options.extends {
-                return Err(syn::Error::new(
-                    extends_attr.span(),
-                    "`metaclass` and `extends` are mutually exclusive",
-                ));
+            // When `metaclass` is set, the base type is either the explicitly-specified
+            // `extends` type (which must itself be a metaclass, i.e. a subtype of `type`)
+            // or Python's built-in `type` when no `extends` is given.
+            match &self.attr.options.extends {
+                Some(extends_attr) => extends_attr.value.clone(),
+                None => parse_quote! { #pyo3_path::types::PyType },
             }
-            parse_quote! { #pyo3_path::types::PyType }
         } else {
             match &self.attr.options.extends {
                 Some(extends_attr) => extends_attr.value.clone(),
@@ -2918,8 +2917,12 @@ impl<'a> PyClassImplsBuilder<'a> {
             quote! { #pyo3_path::PyAny }
         };
 
-        let pyclass_base_type_impl = attr.options.subclass.map(|subclass| {
-            quote_spanned! { subclass.span() =>
+        let pyclass_base_type_impl = if attr.options.subclass.is_some() || is_metaclass {
+            let span = attr.options.subclass
+                .map(|s| s.span())
+                .or_else(|| attr.options.metaclass.map(|s| s.span()))
+                .unwrap_or_else(|| cls.span());
+            Some(quote_spanned! { span =>
                 impl #pyo3_path::impl_::pyclass::PyClassBaseType for #cls {
                     type LayoutAsBase = <Self as #pyo3_path::impl_::pyclass::PyClassImpl>::Layout;
                     type BaseNativeType = <Self as #pyo3_path::impl_::pyclass::PyClassImpl>::BaseNativeType;
@@ -2927,8 +2930,10 @@ impl<'a> PyClassImplsBuilder<'a> {
                     type PyClassMutability = <Self as #pyo3_path::impl_::pyclass::PyClassImpl>::PyClassMutability;
                     type Layout<T: #pyo3_path::impl_::pyclass::PyClassImpl> = <Self::BaseNativeType as #pyo3_path::impl_::pyclass::PyClassBaseType>::Layout<T>;
                 }
-            }
-        });
+            })
+        } else {
+            None
+        };
 
         let mut assertions = TokenStream::new();
 

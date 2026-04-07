@@ -29,6 +29,40 @@ impl SimpleMeta {
     fn __getitem__(&self, item: Py<PyAny>) -> Py<PyAny> {
         item
     }
+
+    // __mro_entries__ is inherited by classes using this metaclass.  When such a
+    // class appears in another class's bases, Python (for non-type bases only)
+    // calls type(C).__mro_entries__(C, bases).  This method is available as a
+    // regular instance method; `slf` is the class object (instance of this
+    // metaclass).
+    fn __mro_entries__(slf: &Bound<'_, Self>, _bases: &Bound<'_, PyTuple>) -> PyResult<Py<PyTuple>> {
+        // Replace this class with `object` in MRO computation for testing.
+        let py = slf.py();
+        Ok(PyTuple::new(py, [py.get_type::<PyAny>()])?.into())
+    }
+}
+
+// A metaclass that demonstrates __prepare__ (returns a custom namespace dict).
+#[pyclass(metaclass)]
+struct PrepMeta;
+
+#[pymethods]
+impl PrepMeta {
+    // __prepare__ is a classmethod called before the class body is executed.
+    // It should return a mapping (typically a dict) used as the class namespace.
+    #[classmethod]
+    #[pyo3(signature = (_name, _bases, **_kwargs))]
+    fn __prepare__(
+        _mcs: &Bound<'_, PyType>,
+        _name: &str,
+        _bases: &Bound<'_, PyTuple>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyDict>> {
+        let py = _mcs.py();
+        let d = PyDict::new(py);
+        d.set_item("__prepared__", true)?;
+        Ok(d.into())
+    }
 }
 
 // A metaclass that overrides __call__ so that calling C() returns a tuple
@@ -51,15 +85,7 @@ impl CallMeta {
     }
 }
 
-// A metaclass with a custom __new__ that returns Py<Self>.
-// Users who want custom metaclass __new__ must:
-// 1. Use both #[new] and #[classmethod].
-// 2. Take `cls: &Bound<'_, PyType>` as first argument.
-// 3. Take the standard metaclass creation args (name, bases, namespace).
-// 4. Call type_new directly via FFI (the Python-level `type.__new__` performs a
-//    safety check (`metatype->tp_new != type_new`) that rejects PyO3 metaclasses
-//    which have a custom tp_new slot; using the C function directly bypasses it).
-// 5. Return Py<Self> (not just Self).
+// A metaclass with a custom __new__ that uses the safe PyType::metaclass_type_new helper.
 #[pyclass(metaclass)]
 struct CustomNewMeta;
 
@@ -73,30 +99,21 @@ impl CustomNewMeta {
         bases: &Bound<'_, PyTuple>,
         namespace: &Bound<'_, PyDict>,
     ) -> PyResult<Py<Self>> {
-        let py = cls.py();
-        // Build the 3-element args tuple that type_new expects.
-        let args =
-            PyTuple::new(py, [name.as_any(), bases.as_any(), namespace.as_any()])?;
-        // Call type_new (CPython's C-level slot) directly.
-        // The Python-level `type.__new__` rejects PyO3 metaclasses via a safety
-        // check (`metatype->tp_new != type_new`).  Using the slot directly lets
-        // us bypass that check while still creating a well-formed type object.
-        let obj_ptr = unsafe {
-            let tp_new = pyo3::ffi::PyType_Type
-                .tp_new
-                .expect("type_new must be set on PyType_Type");
-            tp_new(cls.as_type_ptr(), args.as_ptr(), std::ptr::null_mut())
-        };
-        if obj_ptr.is_null() {
-            return Err(pyo3::PyErr::fetch(py));
-        }
-        Ok(unsafe {
-            Bound::<PyAny>::from_owned_ptr(py, obj_ptr)
-                .cast_into_unchecked::<Self>()
-                .unbind()
-        })
+        // Use the safe helper instead of raw FFI.
+        PyType::metaclass_type_new(cls, name, bases, namespace)?
+            .cast_into::<Self>()
+            .map(|b| b.unbind())
+            .map_err(Into::into)
     }
 }
+
+// A Rust metaclass that extends another Rust metaclass.
+// Uses #[pyclass(metaclass, extends = SimpleMeta)] to inherit from SimpleMeta.
+#[pyclass(metaclass, extends = SimpleMeta)]
+struct DerivedMeta;
+
+#[pymethods]
+impl DerivedMeta {}
 
 #[test]
 fn test_simple_metaclass_type_hierarchy() {
@@ -174,6 +191,42 @@ assert tup == (int, str)
 }
 
 #[test]
+fn test_metaclass_mro_entries() {
+    Python::attach(|py| {
+        let meta = py.get_type::<SimpleMeta>();
+        py_run!(
+            py,
+            meta,
+            r#"
+class C(metaclass=meta): pass
+# __mro_entries__ can be defined on a metaclass and called directly.
+# (Python's automatic __mro_entries__ dispatch only fires for non-type bases;
+#  classes are types so the method won't be auto-triggered when C is a base,
+#  but it IS inherited by C and callable for explicit use.)
+result = C.__mro_entries__((C,))
+assert result == (object,), f"Expected (object,), got {result}"
+"#
+        );
+    });
+}
+
+#[test]
+fn test_metaclass_prepare() {
+    Python::attach(|py| {
+        let meta = py.get_type::<PrepMeta>();
+        py_run!(
+            py,
+            meta,
+            r#"
+# __prepare__ injects '__prepared__' into the class namespace before body runs
+class C(metaclass=meta): pass
+assert C.__prepared__ is True, f"Expected C.__prepared__ == True, got {C.__dict__.get('__prepared__')}"
+"#
+        );
+    });
+}
+
+#[test]
 fn test_metaclass_call() {
     Python::attach(|py| {
         let meta = py.get_type::<CallMeta>();
@@ -221,6 +274,28 @@ class SubMeta(meta): pass
 class F(metaclass=SubMeta): pass
 assert isinstance(F, SubMeta)
 assert isinstance(F, meta)
+"#
+        );
+    });
+}
+
+#[test]
+fn test_rust_metaclass_extends_rust_metaclass() {
+    Python::attach(|py| {
+        let base_meta = py.get_type::<SimpleMeta>();
+        let derived_meta = py.get_type::<DerivedMeta>();
+        py_run!(
+            py,
+            base_meta derived_meta,
+            r#"
+# DerivedMeta must be a subclass of SimpleMeta (and hence of type)
+assert issubclass(derived_meta, base_meta), f"Expected issubclass(derived_meta, base_meta)"
+assert issubclass(derived_meta, type), f"Expected issubclass(derived_meta, type)"
+# Classes using DerivedMeta must be instances of both
+class G(metaclass=derived_meta): pass
+assert isinstance(G, derived_meta)
+assert isinstance(G, base_meta)
+assert issubclass(type(G), derived_meta)
 "#
         );
     });
