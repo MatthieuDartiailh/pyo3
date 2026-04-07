@@ -337,16 +337,23 @@ pub enum SelfType {
 /// entries, CPython's method-wrapper descriptor enforces this before the C
 /// function is reached.
 ///
-/// `Checked` should be used for standalone `#[pyfunction]`s and other contexts
-/// where no class receiver contract exists (e.g., free functions passed as
-/// arguments to `tp_methods` when `cls` is `None`).
+/// `Checked` should be used in cases where that guarantee does not hold:
+/// - Standalone `#[pyfunction]`s (no class receiver).
+/// - Number-protocol binary operator fragments (`__add__`, `__radd__`, …,
+///   `__pow__`, `__rpow__`): CPython combines the forward and reflected
+///   fragments into a single `nb_add`/`nb_power` slot, and the runtime helper
+///   may call the reflected fragment with the operands swapped, meaning `_slf`
+///   can arrive with a non-class type.  The existing
+///   `ExtractErrorMode::NotImplemented` behaviour on type mismatch is preserved
+///   by using `Checked` for those fragments.
 #[derive(Clone, Copy, Debug)]
 pub enum SelfConversionPolicy {
     /// The receiver's type is guaranteed by CPython's slot/method dispatch contract.
     /// Used for all extension-type method and slot entrypoints.
     Trusted,
     /// The receiver's type is verified at runtime. Used for standalone functions
-    /// and any context where the CPython dispatch contract does not apply.
+    /// and number-protocol binary operator fragments where the CPython dispatch
+    /// contract does not guarantee the receiver type.
     Checked,
 }
 
