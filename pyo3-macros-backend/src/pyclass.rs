@@ -96,6 +96,7 @@ pub struct PyClassPyO3Options {
     pub generic: Option<kw::generic>,
     pub from_py_object: Option<kw::from_py_object>,
     pub skip_from_py_object: Option<kw::skip_from_py_object>,
+    pub metaclass: Option<kw::metaclass>,
 }
 
 pub enum PyClassPyO3Option {
@@ -124,6 +125,7 @@ pub enum PyClassPyO3Option {
     Generic(kw::generic),
     FromPyObject(kw::from_py_object),
     SkipFromPyObject(kw::skip_from_py_object),
+    Metaclass(kw::metaclass),
 }
 
 impl Parse for PyClassPyO3Option {
@@ -179,6 +181,8 @@ impl Parse for PyClassPyO3Option {
             input.parse().map(PyClassPyO3Option::FromPyObject)
         } else if lookahead.peek(attributes::kw::skip_from_py_object) {
             input.parse().map(PyClassPyO3Option::SkipFromPyObject)
+        } else if lookahead.peek(attributes::kw::metaclass) {
+            input.parse().map(PyClassPyO3Option::Metaclass)
         } else {
             Err(lookahead.error())
         }
@@ -257,6 +261,7 @@ impl PyClassPyO3Options {
                 );
                 set_option!(from_py_object)
             }
+            PyClassPyO3Option::Metaclass(metaclass) => set_option!(metaclass),
         }
         Ok(())
     }
@@ -583,6 +588,8 @@ pub fn build_py_enum(
         bail_spanned!(extends.span() => "enums can't extend from other classes");
     } else if let Some(subclass) = &args.options.subclass {
         bail_spanned!(subclass.span() => "enums can't be inherited by other classes");
+    } else if let Some(metaclass) = &args.options.metaclass {
+        bail_spanned!(metaclass.span() => "enums can't be metaclasses");
     } else if enum_.variants.is_empty() {
         bail_spanned!(enum_.brace_token.span.join() => "#[pyclass] can't be used on enums without any variants");
     }
@@ -2750,8 +2757,8 @@ impl<'a> PyClassImplsBuilder<'a> {
         let Ctx { pyo3_path, .. } = ctx;
         let cls = self.cls_ident;
         let attr = self.attr;
-        // If #cls is not extended type, we allow Self->PyObject conversion
-        if attr.options.extends.is_none() {
+        // If #cls is not extended type (and not a metaclass), we allow Self->PyObject conversion
+        if attr.options.extends.is_none() && attr.options.metaclass.is_none() {
             let output_type = get_conversion_type_hint(ctx, &format_ident!("OUTPUT_TYPE"), cls);
             quote! {
                 impl<'py> #pyo3_path::conversion::IntoPyObject<'py> for #cls {
@@ -2788,11 +2795,23 @@ impl<'a> PyClassImplsBuilder<'a> {
         };
 
         let is_basetype = self.attr.options.subclass.is_some();
-        let base = match &self.attr.options.extends {
-            Some(extends_attr) => extends_attr.value.clone(),
-            None => parse_quote! { #pyo3_path::PyAny },
+        let is_metaclass = self.attr.options.metaclass.is_some();
+        let base = if is_metaclass {
+            // When `metaclass` is set, the base type is always `PyType` (Python's `type`).
+            if let Some(extends_attr) = &self.attr.options.extends {
+                return Err(syn::Error::new(
+                    extends_attr.span(),
+                    "`metaclass` and `extends` are mutually exclusive",
+                ));
+            }
+            parse_quote! { #pyo3_path::types::PyType }
+        } else {
+            match &self.attr.options.extends {
+                Some(extends_attr) => extends_attr.value.clone(),
+                None => parse_quote! { #pyo3_path::PyAny },
+            }
         };
-        let is_subclass = self.attr.options.extends.is_some();
+        let is_subclass = self.attr.options.extends.is_some() || is_metaclass;
         let is_mapping: bool = self.attr.options.mapping.is_some();
         let is_sequence: bool = self.attr.options.sequence.is_some();
         let is_immutable_type = self.attr.options.immutable_type.is_some();
@@ -2893,7 +2912,7 @@ impl<'a> PyClassImplsBuilder<'a> {
             quote! { #pyo3_path::impl_::pyclass::PyClassDummySlot }
         };
 
-        let base_nativetype = if attr.options.extends.is_some() {
+        let base_nativetype = if attr.options.extends.is_some() || is_metaclass {
             quote! { <Self::BaseType as #pyo3_path::impl_::pyclass::PyClassBaseType>::BaseNativeType }
         } else {
             quote! { #pyo3_path::PyAny }
@@ -3003,6 +3022,7 @@ impl<'a> PyClassImplsBuilder<'a> {
                 const IS_MAPPING: bool = #is_mapping;
                 const IS_SEQUENCE: bool = #is_sequence;
                 const IS_IMMUTABLE_TYPE: bool = #is_immutable_type;
+                const IS_METACLASS: bool = #is_metaclass;
 
                 type Layout = <Self::BaseNativeType as #pyo3_path::impl_::pyclass::PyClassBaseType>::Layout<Self>;
                 type BaseType = #base;

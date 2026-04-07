@@ -177,6 +177,9 @@ pub trait PyClassImpl: Sized + 'static {
     /// #[pyclass(immutable_type)]
     const IS_IMMUTABLE_TYPE: bool = false;
 
+    /// #[pyclass(metaclass)]
+    const IS_METACLASS: bool = false;
+
     /// Description of how this class is laid out in memory
     type Layout: PyClassObjectLayout<Self>;
 
