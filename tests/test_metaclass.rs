@@ -56,8 +56,9 @@ impl CallMeta {
 // 1. Use both #[new] and #[classmethod].
 // 2. Take `cls: &Bound<'_, PyType>` as first argument.
 // 3. Take the standard metaclass creation args (name, bases, namespace).
-// 4. Call type_new directly via FFI (the Python-level type.__new__ performs a
-//    safety check that rejects PyO3 metaclasses, so use the C function directly).
+// 4. Call type_new directly via FFI (the Python-level `type.__new__` performs a
+//    safety check (`metatype->tp_new != type_new`) that rejects PyO3 metaclasses
+//    which have a custom tp_new slot; using the C function directly bypasses it).
 // 5. Return Py<Self> (not just Self).
 #[pyclass(metaclass)]
 struct CustomNewMeta;

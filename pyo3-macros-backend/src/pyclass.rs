@@ -2757,7 +2757,7 @@ impl<'a> PyClassImplsBuilder<'a> {
         let Ctx { pyo3_path, .. } = ctx;
         let cls = self.cls_ident;
         let attr = self.attr;
-        // If #cls is not extended type (and not a metaclass), we allow Self->PyObject conversion
+        // If the class is not an extended type (and not a metaclass), we allow Self->PyObject conversion
         if attr.options.extends.is_none() && attr.options.metaclass.is_none() {
             let output_type = get_conversion_type_hint(ctx, &format_ident!("OUTPUT_TYPE"), cls);
             quote! {
