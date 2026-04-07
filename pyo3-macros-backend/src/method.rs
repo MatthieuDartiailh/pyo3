@@ -331,21 +331,22 @@ pub enum SelfType {
 /// # Invariant
 ///
 /// The `Trusted` path is valid due to CPython's slot/method receiver contract:
-/// when CPython dispatches through a type slot installed on an extension type,
-/// the receiver is guaranteed to be an instance of that type (or a compatible
-/// subtype). Explicit Python calls to dunder methods go through CPython's slot
-/// wrapper, which performs type validation before reaching the generated wrapper.
+/// when CPython dispatches a method call on an extension type — whether through
+/// a type slot or through `tp_methods` — the receiver is guaranteed to be an
+/// instance of the owning type (or a compatible subtype).  For `tp_methods`
+/// entries, CPython's method-wrapper descriptor enforces this before the C
+/// function is reached.
 ///
-/// `Checked` should be used for any context where that guarantee does not hold,
-/// e.g., regular `tp_methods` entries that can be called directly with an
-/// arbitrary receiver from Python.
+/// `Checked` should be used for standalone `#[pyfunction]`s and other contexts
+/// where no class receiver contract exists (e.g., free functions passed as
+/// arguments to `tp_methods` when `cls` is `None`).
 #[derive(Clone, Copy, Debug)]
 pub enum SelfConversionPolicy {
-    /// The receiver's type is guaranteed by CPython's slot dispatch contract.
-    /// Used for all extension-type slot entrypoints.
+    /// The receiver's type is guaranteed by CPython's slot/method dispatch contract.
+    /// Used for all extension-type method and slot entrypoints.
     Trusted,
-    /// The receiver's type is verified at runtime. Used when the receiver cannot
-    /// be assumed to be of the correct type (e.g., regular Python-callable methods).
+    /// The receiver's type is verified at runtime. Used for standalone functions
+    /// and any context where the CPython dispatch contract does not apply.
     Checked,
 }
 

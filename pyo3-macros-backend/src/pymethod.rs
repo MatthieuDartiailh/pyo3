@@ -378,10 +378,10 @@ pub fn impl_py_method_def(
         &wrapper_ident,
         Some(cls),
         calling_convention,
-        // Regular `tp_methods` entries can be called from Python with an arbitrary
-        // receiver (e.g. `MyClass.method(wrong_type)`), so the receiver type must
-        // be checked at runtime.
-        SelfConversionPolicy::Checked,
+        // Methods in `tp_methods` are dispatched through CPython's method-wrapper
+        // descriptor, which enforces that the receiver is an instance of the owning
+        // type before reaching the C function. The trusted path is therefore valid.
+        SelfConversionPolicy::Trusted,
         ctx,
     )?;
     let methoddef = spec.get_methoddef(
