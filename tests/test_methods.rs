@@ -56,12 +56,7 @@ fn tp_methods_receiver_type_checked_by_cpython() {
         // Calling an unbound method with a wrong-type `self` raises TypeError.
         // CPython's method-wrapper descriptor enforces the type before our Rust
         // wrapper is invoked.
-        py_expect_exception!(
-            py,
-            cls,
-            "cls.method(object())",
-            PyTypeError
-        );
+        py_expect_exception!(py, cls, "cls.method(object())", PyTypeError);
     });
 }
 

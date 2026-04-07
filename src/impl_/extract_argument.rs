@@ -232,9 +232,11 @@ pub unsafe fn extract_pyclass_ref_trusted<'a, 'holder, T: PyClass>(
     holder: &'holder mut Option<PyClassGuard<'a, T>>,
 ) -> PyResult<&'holder T> {
     // Safety: caller guarantees obj is of type T via CPython slot receiver contract
-    Ok(&*holder.insert(PyClassGuard::try_borrow_from_borrowed(unsafe {
-        obj.cast_unchecked::<T>()
-    })?))
+    Ok(
+        &*holder.insert(PyClassGuard::try_borrow_from_borrowed(unsafe {
+            obj.cast_unchecked::<T>()
+        })?),
+    )
 }
 
 /// Trusted variant of [`extract_pyclass_ref_mut`]: performs an unchecked cast for
@@ -248,9 +250,11 @@ pub unsafe fn extract_pyclass_ref_mut_trusted<'a, 'holder, T: PyClass<Frozen = F
     holder: &'holder mut Option<PyClassGuardMut<'a, T>>,
 ) -> PyResult<&'holder mut T> {
     // Safety: caller guarantees obj is of type T via CPython slot receiver contract
-    Ok(&mut *holder.insert(PyClassGuardMut::try_borrow_mut_from_borrowed(unsafe {
-        obj.cast_unchecked::<T>()
-    })?))
+    Ok(
+        &mut *holder.insert(PyClassGuardMut::try_borrow_mut_from_borrowed(unsafe {
+            obj.cast_unchecked::<T>()
+        })?),
+    )
 }
 
 /// The standard implementation of how PyO3 extracts a `#[pyfunction]` or `#[pymethod]` function argument.

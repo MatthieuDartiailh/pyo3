@@ -488,7 +488,13 @@ fn impl_clear_slot(cls: &syn::Type, spec: &FnSpec<'_>, ctx: &Ctx) -> syn::Result
         _ => bail_spanned!(spec.name.span() => "expected instance method for `__clear__` function"),
     };
     let mut holders = Holders::new();
-    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, &mut holders, ctx);
+    let slf = self_type.receiver(
+        cls,
+        ExtractErrorMode::Raise,
+        SelfConversionPolicy::Trusted,
+        &mut holders,
+        ctx,
+    );
 
     if let [arg, ..] = args {
         bail_spanned!(arg.ty().span() => "`__clear__` function expected to have no arguments");
@@ -586,7 +592,13 @@ fn impl_call_setter(
     ctx: &Ctx,
 ) -> syn::Result<TokenStream> {
     let (py_arg, args) = split_off_python_arg(&spec.signature.arguments);
-    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, holders, ctx);
+    let slf = self_type.receiver(
+        cls,
+        ExtractErrorMode::Raise,
+        SelfConversionPolicy::Trusted,
+        holders,
+        ctx,
+    );
 
     if args.is_empty() {
         bail_spanned!(spec.name.span() => "setter function expected to have one argument");
@@ -626,7 +638,13 @@ pub fn impl_py_setter_def(
                 span: Span::call_site(),
                 non_null: true,
             }
-            .receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, &mut holders, ctx);
+            .receiver(
+                cls,
+                ExtractErrorMode::Raise,
+                SelfConversionPolicy::Trusted,
+                &mut holders,
+                ctx,
+            );
             if let Some(ident) = &field.ident {
                 // named struct field
                 quote!({ #slf.#ident = _val; })
@@ -772,7 +790,13 @@ fn impl_call_getter(
     ctx: &Ctx,
 ) -> syn::Result<TokenStream> {
     let (py_arg, args) = split_off_python_arg(&spec.signature.arguments);
-    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, holders, ctx);
+    let slf = self_type.receiver(
+        cls,
+        ExtractErrorMode::Raise,
+        SelfConversionPolicy::Trusted,
+        holders,
+        ctx,
+    );
     ensure_spanned!(
         args.is_empty(),
         args[0].ty().span() => "getter function can only have one argument (of type pyo3::Python)"
@@ -947,7 +971,13 @@ fn impl_call_deleter(
     ctx: &Ctx,
 ) -> Result<TokenStream> {
     let (py_arg, args) = split_off_python_arg(&spec.signature.arguments);
-    let slf = self_type.receiver(cls, ExtractErrorMode::Raise, SelfConversionPolicy::Trusted, holders, ctx);
+    let slf = self_type.receiver(
+        cls,
+        ExtractErrorMode::Raise,
+        SelfConversionPolicy::Trusted,
+        holders,
+        ctx,
+    );
 
     if !args.is_empty() {
         bail_spanned!(spec.name.span() =>
@@ -1462,13 +1492,9 @@ fn generate_method_body(
         pyo3_path,
         output_span,
     } = ctx;
-    let self_arg = spec.tp.self_arg(
-        Some(cls),
-        extract_error_mode,
-        self_conversion,
-        holders,
-        ctx,
-    );
+    let self_arg = spec
+        .tp
+        .self_arg(Some(cls), extract_error_mode, self_conversion, holders, ctx);
     let rust_name = spec.name;
     let warnings = spec.warnings.build_py_warning(ctx);
 
