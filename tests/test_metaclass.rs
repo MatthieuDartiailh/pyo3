@@ -29,17 +29,6 @@ impl SimpleMeta {
     fn __getitem__(&self, item: Py<PyAny>) -> Py<PyAny> {
         item
     }
-
-    // __mro_entries__ is inherited by classes using this metaclass.  When such a
-    // class appears in another class's bases, Python (for non-type bases only)
-    // calls type(C).__mro_entries__(C, bases).  This method is available as a
-    // regular instance method; `slf` is the class object (instance of this
-    // metaclass).
-    fn __mro_entries__(slf: &Bound<'_, Self>, _bases: &Bound<'_, PyTuple>) -> PyResult<Py<PyTuple>> {
-        // Replace this class with `object` in MRO computation for testing.
-        let py = slf.py();
-        Ok(PyTuple::new(py, [py.get_type::<PyAny>()])?.into())
-    }
 }
 
 // A metaclass that demonstrates __prepare__ (returns a custom namespace dict).
@@ -185,26 +174,6 @@ assert C[str] is str
 # Tuple subscript creates a tuple
 tup = C[int, str]
 assert tup == (int, str)
-"#
-        );
-    });
-}
-
-#[test]
-fn test_metaclass_mro_entries() {
-    Python::attach(|py| {
-        let meta = py.get_type::<SimpleMeta>();
-        py_run!(
-            py,
-            meta,
-            r#"
-class C(metaclass=meta): pass
-# __mro_entries__ can be defined on a metaclass and called directly.
-# (Python's automatic __mro_entries__ dispatch only fires for non-type bases;
-#  classes are types so the method won't be auto-triggered when C is a base,
-#  but it IS inherited by C and callable for explicit use.)
-result = C.__mro_entries__((C,))
-assert result == (object,), f"Expected (object,), got {result}"
 "#
         );
     });

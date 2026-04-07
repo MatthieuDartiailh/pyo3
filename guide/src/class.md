@@ -709,25 +709,6 @@ impl PrepMeta {
 # });
 ```
 
-### `__mro_entries__`
-
-`__mro_entries__` is an instance method on the metaclass that is inherited by every class created with it. Python calls `type(C).__mro_entries__(C, bases)` when `C` appears in a bases tuple and `C` is not itself a type. Define it as a regular instance method:
-
-```rust
-# use pyo3::prelude::*;
-# use pyo3::types::{PyTuple, PyType};
-# #[pyclass(metaclass)]
-# struct MroMeta;
-#[pymethods]
-impl MroMeta {
-    fn __mro_entries__(slf: &Bound<'_, Self>, _bases: &Bound<'_, PyTuple>) -> PyResult<Py<PyTuple>> {
-        let py = slf.py();
-        // Replace this entry with `object` in MRO calculation.
-        Ok(PyTuple::new(py, [py.get_type::<PyAny>()])?.into())
-    }
-}
-```
-
 ### Custom `__new__` and the safe helper
 
 When you define a custom `__new__`, use the combination `#[new] #[classmethod]` and return `Py<Self>`. The Python-level `type.__new__` performs a safety check (`metatype->tp_new != type_new`) that rejects PyO3 metaclasses that have a custom `tp_new` slot. Use the provided safe helper [`PyType::metaclass_type_new`] instead:
