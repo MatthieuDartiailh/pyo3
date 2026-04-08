@@ -87,10 +87,7 @@ where
             }
             .type_doc(doc)
             .offsets(dict_offset, weaklist_offset)
-            // Metaclasses are always subclassable: Python's `type` itself has BASETYPE
-            // set, and any subclass of `type` should likewise be subclassable so that
-            // users can further specialize the metaclass hierarchy in Python.
-            .set_is_basetype(is_basetype || is_metaclass)
+            .set_is_basetype(is_basetype)
             .class_items(items_iter)
             .build(py, name, module, basicsize)
         }

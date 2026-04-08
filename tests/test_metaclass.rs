@@ -8,7 +8,8 @@ mod test_utils;
 
 // A simple metaclass with no extra data fields or custom __new__.
 // It relies on the inherited `type.__new__` for class creation.
-#[pyclass(extends = PyType)]
+// `subclass` is set so this metaclass can itself be used as a base (e.g. for DerivedMeta).
+#[pyclass(extends = PyType, subclass)]
 struct SimpleMeta;
 
 #[pymethods]
@@ -97,7 +98,8 @@ impl CustomNewMeta {
 }
 
 // A Rust metaclass that extends another Rust metaclass.
-// Uses #[pyclass(extends = SimpleMeta)] to inherit from SimpleMeta.
+// Uses #[pyclass(extends = SimpleMeta)] to inherit from SimpleMeta
+// (which must have `subclass` to be usable as a base).
 #[pyclass(extends = SimpleMeta)]
 struct DerivedMeta;
 

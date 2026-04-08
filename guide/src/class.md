@@ -745,11 +745,11 @@ impl CustomMeta {
 
 ### Extending a Rust metaclass
 
-A Rust metaclass can be used as a base for further specialisation by writing `#[pyclass(extends = ParentMeta)]`. The `IS_METACLASS` flag is propagated automatically through the chain at compile time:
+A Rust metaclass can be used as a base for further specialisation. Add `subclass` to the base metaclass to make it eligible, then extend it normally:
 
 ```rust
 # use pyo3::prelude::*;
-# #[pyclass(extends = pyo3::types::PyType)]
+# #[pyclass(extends = pyo3::types::PyType, subclass)]
 # struct BaseMeta;
 # #[pymethods]
 # impl BaseMeta {}

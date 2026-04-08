@@ -2750,7 +2750,7 @@ impl<'a> PyClassImplsBuilder<'a> {
         let Ctx { pyo3_path, .. } = ctx;
         let cls = self.cls_ident;
         let attr = self.attr;
-        // If the class is not an extended type, we allow Self->PyObject conversion
+        // If #cls is not extended type, we allow Self->PyObject conversion
         if attr.options.extends.is_none() {
             let output_type = get_conversion_type_hint(ctx, &format_ident!("OUTPUT_TYPE"), cls);
             quote! {
@@ -2899,12 +2899,8 @@ impl<'a> PyClassImplsBuilder<'a> {
             quote! { #pyo3_path::PyAny }
         };
 
-        let pyclass_base_type_impl = if attr.options.subclass.is_some() || attr.options.extends.is_some() {
-            let span = attr.options.subclass
-                .map(|s| s.span())
-                .or_else(|| attr.options.extends.as_ref().map(|e| e.span()))
-                .unwrap_or_else(|| cls.span());
-            Some(quote_spanned! { span =>
+        let pyclass_base_type_impl = attr.options.subclass.map(|subclass| {
+            quote_spanned! { subclass.span() =>
                 impl #pyo3_path::impl_::pyclass::PyClassBaseType for #cls {
                     type LayoutAsBase = <Self as #pyo3_path::impl_::pyclass::PyClassImpl>::Layout;
                     type BaseNativeType = <Self as #pyo3_path::impl_::pyclass::PyClassImpl>::BaseNativeType;
@@ -2913,10 +2909,8 @@ impl<'a> PyClassImplsBuilder<'a> {
                     type Layout<T: #pyo3_path::impl_::pyclass::PyClassImpl> = <Self::BaseNativeType as #pyo3_path::impl_::pyclass::PyClassBaseType>::Layout<T>;
                     const IS_METACLASS: bool = <Self as #pyo3_path::impl_::pyclass::PyClassImpl>::IS_METACLASS;
                 }
-            })
-        } else {
-            None
-        };
+            }
+        });
 
         let mut assertions = TokenStream::new();
 
