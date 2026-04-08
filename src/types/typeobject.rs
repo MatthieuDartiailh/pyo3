@@ -59,7 +59,7 @@ impl PyType {
     /// # Usage
     ///
     /// ```rust,ignore
-    /// #[pyclass(metaclass)]
+    /// #[pyclass(extends = pyo3::types::PyType)]
     /// struct MyMeta;
     ///
     /// #[pymethods]
@@ -296,7 +296,7 @@ impl<'py> PyTypeMethods<'py> for Bound<'py, PyType> {
     }
 }
 
-// PyType can be used as a base class for #[pyclass(metaclass)] structs.
+// PyType can be used as a base class for metaclass structs (i.e. #[pyclass(extends = PyType)]).
 //
 // For non-limited API builds the exact C layout (PyHeapTypeObject) is known at
 // compile-time, so we use the static-size object approach.
@@ -317,6 +317,7 @@ impl crate::impl_::pyclass::PyClassBaseType for PyType {
     type PyClassMutability = crate::pycell::impl_::ImmutableClass;
     type Layout<T: crate::impl_::pyclass::PyClassImpl> =
         crate::impl_::pycell::PyStaticClassObject<T>;
+    const IS_METACLASS: bool = true;
 }
 
 #[cfg(all(Py_3_12, Py_LIMITED_API))]
@@ -327,6 +328,7 @@ impl crate::impl_::pyclass::PyClassBaseType for PyType {
     type PyClassMutability = crate::pycell::impl_::ImmutableClass;
     type Layout<T: crate::impl_::pyclass::PyClassImpl> =
         crate::impl_::pycell::PyVariableClassObject<T>;
+    const IS_METACLASS: bool = true;
 }
 
 #[cfg(test)]

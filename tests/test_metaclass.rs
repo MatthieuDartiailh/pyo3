@@ -8,7 +8,7 @@ mod test_utils;
 
 // A simple metaclass with no extra data fields or custom __new__.
 // It relies on the inherited `type.__new__` for class creation.
-#[pyclass(metaclass)]
+#[pyclass(extends = PyType)]
 struct SimpleMeta;
 
 #[pymethods]
@@ -32,7 +32,7 @@ impl SimpleMeta {
 }
 
 // A metaclass that demonstrates __prepare__ (returns a custom namespace dict).
-#[pyclass(metaclass)]
+#[pyclass(extends = PyType)]
 struct PrepMeta;
 
 #[pymethods]
@@ -56,7 +56,7 @@ impl PrepMeta {
 
 // A metaclass that overrides __call__ so that calling C() returns a tuple
 // (cls, args, kwargs) for testing.
-#[pyclass(metaclass)]
+#[pyclass(extends = PyType)]
 struct CallMeta;
 
 #[pymethods]
@@ -75,7 +75,7 @@ impl CallMeta {
 }
 
 // A metaclass with a custom __new__ that uses the safe PyType::metaclass_type_new helper.
-#[pyclass(metaclass)]
+#[pyclass(extends = PyType)]
 struct CustomNewMeta;
 
 #[pymethods]
@@ -97,8 +97,8 @@ impl CustomNewMeta {
 }
 
 // A Rust metaclass that extends another Rust metaclass.
-// Uses #[pyclass(metaclass, extends = SimpleMeta)] to inherit from SimpleMeta.
-#[pyclass(metaclass, extends = SimpleMeta)]
+// Uses #[pyclass(extends = SimpleMeta)] to inherit from SimpleMeta.
+#[pyclass(extends = SimpleMeta)]
 struct DerivedMeta;
 
 #[pymethods]

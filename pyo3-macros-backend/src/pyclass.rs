@@ -96,7 +96,6 @@ pub struct PyClassPyO3Options {
     pub generic: Option<kw::generic>,
     pub from_py_object: Option<kw::from_py_object>,
     pub skip_from_py_object: Option<kw::skip_from_py_object>,
-    pub metaclass: Option<kw::metaclass>,
 }
 
 pub enum PyClassPyO3Option {
@@ -125,7 +124,6 @@ pub enum PyClassPyO3Option {
     Generic(kw::generic),
     FromPyObject(kw::from_py_object),
     SkipFromPyObject(kw::skip_from_py_object),
-    Metaclass(kw::metaclass),
 }
 
 impl Parse for PyClassPyO3Option {
@@ -181,8 +179,6 @@ impl Parse for PyClassPyO3Option {
             input.parse().map(PyClassPyO3Option::FromPyObject)
         } else if lookahead.peek(attributes::kw::skip_from_py_object) {
             input.parse().map(PyClassPyO3Option::SkipFromPyObject)
-        } else if lookahead.peek(attributes::kw::metaclass) {
-            input.parse().map(PyClassPyO3Option::Metaclass)
         } else {
             Err(lookahead.error())
         }
@@ -261,7 +257,6 @@ impl PyClassPyO3Options {
                 );
                 set_option!(from_py_object)
             }
-            PyClassPyO3Option::Metaclass(metaclass) => set_option!(metaclass),
         }
         Ok(())
     }
@@ -588,8 +583,6 @@ pub fn build_py_enum(
         bail_spanned!(extends.span() => "enums can't extend from other classes");
     } else if let Some(subclass) = &args.options.subclass {
         bail_spanned!(subclass.span() => "enums can't be inherited by other classes");
-    } else if let Some(metaclass) = &args.options.metaclass {
-        bail_spanned!(metaclass.span() => "enums can't be metaclasses");
     } else if enum_.variants.is_empty() {
         bail_spanned!(enum_.brace_token.span.join() => "#[pyclass] can't be used on enums without any variants");
     }
@@ -2757,8 +2750,8 @@ impl<'a> PyClassImplsBuilder<'a> {
         let Ctx { pyo3_path, .. } = ctx;
         let cls = self.cls_ident;
         let attr = self.attr;
-        // If the class is not an extended type (and not a metaclass), we allow Self->PyObject conversion
-        if attr.options.extends.is_none() && attr.options.metaclass.is_none() {
+        // If the class is not an extended type, we allow Self->PyObject conversion
+        if attr.options.extends.is_none() {
             let output_type = get_conversion_type_hint(ctx, &format_ident!("OUTPUT_TYPE"), cls);
             quote! {
                 impl<'py> #pyo3_path::conversion::IntoPyObject<'py> for #cls {
@@ -2795,22 +2788,11 @@ impl<'a> PyClassImplsBuilder<'a> {
         };
 
         let is_basetype = self.attr.options.subclass.is_some();
-        let is_metaclass = self.attr.options.metaclass.is_some();
-        let base = if is_metaclass {
-            // When `metaclass` is set, the base type is either the explicitly-specified
-            // `extends` type (which must itself be a metaclass, i.e. a subtype of `type`)
-            // or Python's built-in `type` when no `extends` is given.
-            match &self.attr.options.extends {
-                Some(extends_attr) => extends_attr.value.clone(),
-                None => parse_quote! { #pyo3_path::types::PyType },
-            }
-        } else {
-            match &self.attr.options.extends {
-                Some(extends_attr) => extends_attr.value.clone(),
-                None => parse_quote! { #pyo3_path::PyAny },
-            }
+        let base = match &self.attr.options.extends {
+            Some(extends_attr) => extends_attr.value.clone(),
+            None => parse_quote! { #pyo3_path::PyAny },
         };
-        let is_subclass = self.attr.options.extends.is_some() || is_metaclass;
+        let is_subclass = self.attr.options.extends.is_some();
         let is_mapping: bool = self.attr.options.mapping.is_some();
         let is_sequence: bool = self.attr.options.sequence.is_some();
         let is_immutable_type = self.attr.options.immutable_type.is_some();
@@ -2911,16 +2893,16 @@ impl<'a> PyClassImplsBuilder<'a> {
             quote! { #pyo3_path::impl_::pyclass::PyClassDummySlot }
         };
 
-        let base_nativetype = if attr.options.extends.is_some() || is_metaclass {
+        let base_nativetype = if attr.options.extends.is_some() {
             quote! { <Self::BaseType as #pyo3_path::impl_::pyclass::PyClassBaseType>::BaseNativeType }
         } else {
             quote! { #pyo3_path::PyAny }
         };
 
-        let pyclass_base_type_impl = if attr.options.subclass.is_some() || is_metaclass {
+        let pyclass_base_type_impl = if attr.options.subclass.is_some() || attr.options.extends.is_some() {
             let span = attr.options.subclass
                 .map(|s| s.span())
-                .or_else(|| attr.options.metaclass.map(|s| s.span()))
+                .or_else(|| attr.options.extends.as_ref().map(|e| e.span()))
                 .unwrap_or_else(|| cls.span());
             Some(quote_spanned! { span =>
                 impl #pyo3_path::impl_::pyclass::PyClassBaseType for #cls {
@@ -2929,6 +2911,7 @@ impl<'a> PyClassImplsBuilder<'a> {
                     type Initializer = #pyo3_path::pyclass_init::PyClassInitializer<Self>;
                     type PyClassMutability = <Self as #pyo3_path::impl_::pyclass::PyClassImpl>::PyClassMutability;
                     type Layout<T: #pyo3_path::impl_::pyclass::PyClassImpl> = <Self::BaseNativeType as #pyo3_path::impl_::pyclass::PyClassBaseType>::Layout<T>;
+                    const IS_METACLASS: bool = <Self as #pyo3_path::impl_::pyclass::PyClassImpl>::IS_METACLASS;
                 }
             })
         } else {
@@ -3027,7 +3010,7 @@ impl<'a> PyClassImplsBuilder<'a> {
                 const IS_MAPPING: bool = #is_mapping;
                 const IS_SEQUENCE: bool = #is_sequence;
                 const IS_IMMUTABLE_TYPE: bool = #is_immutable_type;
-                const IS_METACLASS: bool = #is_metaclass;
+                const IS_METACLASS: bool = <#base as #pyo3_path::impl_::pyclass::PyClassBaseType>::IS_METACLASS;
 
                 type Layout = <Self::BaseNativeType as #pyo3_path::impl_::pyclass::PyClassBaseType>::Layout<Self>;
                 type BaseType = #base;

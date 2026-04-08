@@ -621,12 +621,12 @@ Here, the `args` and `kwargs` allow creating instances of the subclass passing i
 
 A **metaclass** is a class whose instances are themselves classes. Python's built-in `type` is the default metaclass; every class you write is an instance of `type`. By defining a custom metaclass you can intercept and customise class creation, `isinstance` / `issubclass` checks, subscript (`C[T]`) dispatch, and more.
 
-PyO3 lets you define a metaclass in Rust by adding `metaclass` to `#[pyclass]`:
+PyO3 lets you define a metaclass in Rust by extending `PyType` with `#[pyclass(extends = PyType)]`:
 
 ```rust
 # use pyo3::prelude::*;
 # use pyo3::types::{PyAny, PyDict, PyTuple, PyType};
-#[pyclass(metaclass)]
+#[pyclass(extends = PyType)]
 struct MyMeta;
 
 #[pymethods]
@@ -673,7 +673,7 @@ impl MyMeta {
 # });
 ```
 
-Under the hood `#[pyclass(metaclass)]` makes the Rust struct a **subtype of Python's `type`** (i.e. `issubclass(MyMeta, type)` is always `True`).
+Under the hood `#[pyclass(extends = PyType)]` makes the Rust struct a **subtype of Python's `type`** (i.e. `issubclass(MyMeta, type)` is always `True`). The metaclass status is inferred automatically: any struct that extends `PyType` (or another metaclass) has `IS_METACLASS = true` propagated through the type chain at compile time.
 
 ### `__prepare__`
 
@@ -682,7 +682,7 @@ Under the hood `#[pyclass(metaclass)]` makes the Rust struct a **subtype of Pyth
 ```rust
 # use pyo3::prelude::*;
 # use pyo3::types::{PyDict, PyTuple, PyType};
-# #[pyclass(metaclass)]
+# #[pyclass(extends = PyType)]
 # struct PrepMeta;
 #[pymethods]
 impl PrepMeta {
@@ -716,7 +716,7 @@ When you define a custom `__new__`, use the combination `#[new] #[classmethod]` 
 ```rust
 # use pyo3::prelude::*;
 # use pyo3::types::{PyDict, PyString, PyTuple, PyType};
-# #[pyclass(metaclass)]
+# #[pyclass(extends = PyType)]
 # struct CustomMeta;
 #[pymethods]
 impl CustomMeta {
@@ -745,15 +745,15 @@ impl CustomMeta {
 
 ### Extending a Rust metaclass
 
-A Rust metaclass that has `PyClassBaseType` automatically implemented (which `#[pyclass(metaclass)]` always provides) can be used as a base for further specialisation. Use `#[pyclass(metaclass, extends = ParentMeta)]`:
+A Rust metaclass can be used as a base for further specialisation by writing `#[pyclass(extends = ParentMeta)]`. The `IS_METACLASS` flag is propagated automatically through the chain at compile time:
 
 ```rust
 # use pyo3::prelude::*;
-# #[pyclass(metaclass)]
+# #[pyclass(extends = pyo3::types::PyType)]
 # struct BaseMeta;
 # #[pymethods]
 # impl BaseMeta {}
-#[pyclass(metaclass, extends = BaseMeta)]
+#[pyclass(extends = BaseMeta)]
 struct DerivedMeta;
 
 #[pymethods]
