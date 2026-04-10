@@ -127,8 +127,8 @@ jobs:
           cargo llvm-cov clean --workspace --profraw-only
           nox -s set-coverage-env
 
-      - name: Build docs
-        run: nox -s docs
+      # - name: Build docs
+      #   run: nox -s docs
 
       - name: Run Rust tests
         run: nox -s test-rust

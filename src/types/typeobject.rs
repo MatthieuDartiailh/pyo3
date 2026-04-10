@@ -242,6 +242,40 @@ impl<'py> PyTypeMethods<'py> for Bound<'py, PyType> {
     }
 }
 
+// PyType can be used as a base class for metaclass structs (i.e. #[pyclass(extends = PyType)]).
+//
+// For non-limited API builds the exact C layout (PyHeapTypeObject) is known at
+// compile-time, so we use the static-size object approach.
+// For limited-API builds (Python ≥ 3.12) CPython will allocate the correct
+// amount of memory for us when we pass a negative basicsize; we use the
+// variable-size approach for those.
+#[cfg(not(any(Py_LIMITED_API, PyPy)))]
+unsafe impl crate::type_object::PyLayout<PyType> for crate::ffi::PyHeapTypeObject {}
+#[cfg(not(any(Py_LIMITED_API, PyPy)))]
+impl crate::type_object::PySizedLayout<PyType> for crate::ffi::PyHeapTypeObject {}
+
+#[cfg(not(any(Py_LIMITED_API, PyPy)))]
+impl crate::impl_::pyclass::PyClassBaseType for PyType {
+    type LayoutAsBase = crate::impl_::pycell::PyClassObjectBase<crate::ffi::PyHeapTypeObject>;
+    type BaseNativeType = PyType;
+    type Initializer = crate::impl_::pyclass_init::PyNativeTypeInitializer<Self>;
+    type PyClassMutability = crate::pycell::impl_::ImmutableClass;
+    type Layout<T: crate::impl_::pyclass::PyClassImpl> =
+        crate::impl_::pycell::PyStaticClassObject<T>;
+    const IS_METACLASS: bool = true;
+}
+
+#[cfg(all(Py_3_12, Py_LIMITED_API))]
+impl crate::impl_::pyclass::PyClassBaseType for PyType {
+    type LayoutAsBase = crate::impl_::pycell::PyVariableClassObjectBase;
+    type BaseNativeType = PyType;
+    type Initializer = crate::impl_::pyclass_init::PyNativeTypeInitializer<Self>;
+    type PyClassMutability = crate::pycell::impl_::ImmutableClass;
+    type Layout<T: crate::impl_::pyclass::PyClassImpl> =
+        crate::impl_::pycell::PyVariableClassObject<T>;
+    const IS_METACLASS: bool = true;
+}
+
 #[cfg(test)]
 mod tests {
     use crate::test_utils::generate_unique_module_name;
