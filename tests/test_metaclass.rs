@@ -81,7 +81,7 @@ struct CustomNewMeta;
 
 #[pymethods]
 impl CustomNewMeta {
-    #[classmethod]
+    #[new]
     fn __new__(
         meta: &Bound<'_, PyType>,
         name: &Bound<'_, PyString>,
